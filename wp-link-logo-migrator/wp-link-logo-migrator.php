@@ -3,7 +3,7 @@
  * Plugin Name: 链接与 Logo 迁移工具
  * Plugin URI: https://www.maotk.com/
  * Description: 选择并迁移 WordPress 链接、分类、简介、评分和 Logo 图片。
- * Version: 2.0.0
+ * Version: 2.1.0
  * Author: Mao TK
  * Author URI: https://www.maotk.com/
  * Requires at least: 5.8
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class WP_Link_Logo_Migrator {
-	const VERSION            = '2.0.0';
+	const VERSION            = '2.1.0';
 	const PAGE               = 'wp-link-logo-migrator';
 	const BRAND_URL          = 'https://www.maotk.com/';
 	const BRAND_LOGO         = 'https://www.maotk.com/wp-content/uploads/maotk-favicon.svg';
@@ -31,6 +31,7 @@ final class WP_Link_Logo_Migrator {
 		add_action( 'admin_menu', array( __CLASS__, 'admin_menu' ) );
 		add_action( 'admin_post_wllm_export', array( __CLASS__, 'export' ) );
 		add_action( 'admin_post_wllm_import', array( __CLASS__, 'import' ) );
+		add_action( 'wp_ajax_wllm_progress', array( __CLASS__, 'ajax_progress' ) );
 		add_filter( 'plugin_row_meta', array( __CLASS__, 'plugin_row_meta' ), 10, 2 );
 	}
 
@@ -51,11 +52,43 @@ final class WP_Link_Logo_Migrator {
 		}
 	}
 
+	public static function ajax_progress() {
+		self::require_access();
+		check_ajax_referer( 'wllm_progress', 'nonce' );
+		$token = isset( $_POST['token'] ) ? sanitize_key( wp_unslash( $_POST['token'] ) ) : '';
+		$data  = $token ? get_transient( self::progress_key( $token ) ) : false;
+		wp_send_json_success( $data ? $data : array( 'status' => 'pending' ) );
+	}
+
+	private static function progress_key( $token ) {
+		return 'wllm_progress_' . get_current_user_id() . '_' . $token;
+	}
+
+	private static function set_progress( $token, $completed, $total, $stage, $current = '', $status = 'running' ) {
+		if ( ! $token ) return;
+		$old = get_transient( self::progress_key( $token ) );
+		set_transient(
+			self::progress_key( $token ),
+			array(
+				'status' => $status,
+				'completed' => max( 0, (int) $completed ),
+				'total' => max( 1, (int) $total ),
+				'stage' => sanitize_text_field( $stage ),
+				'current' => sanitize_text_field( $current ),
+				'started_at' => is_array( $old ) && ! empty( $old['started_at'] ) ? (float) $old['started_at'] : microtime( true ),
+				'updated_at' => microtime( true ),
+			),
+			HOUR_IN_SECONDS
+		);
+	}
+
 	public static function render_page() {
 		self::require_access();
 		$links        = get_bookmarks( array( 'hide_invisible' => 0, 'orderby' => 'name', 'order' => 'ASC', 'limit' => -1 ) );
 		$categories   = get_terms( array( 'taxonomy' => 'link_category', 'hide_empty' => false ) );
 		$export_token = wp_generate_password( 20, false, false );
+		$import_token = wp_generate_password( 20, false, false );
+		$progress_nonce = wp_create_nonce( 'wllm_progress' );
 		$link_terms   = array();
 		foreach ( $links as $link ) {
 			$ids = wp_get_object_terms( (int) $link->link_id, 'link_category', array( 'fields' => 'ids' ) );
@@ -141,6 +174,7 @@ final class WP_Link_Logo_Migrator {
 				<h2>第二步：在新网站导入</h2>
 				<form id="wllm-import-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<input type="hidden" name="action" value="wllm_import">
+					<input type="hidden" name="progress_token" value="<?php echo esc_attr( $import_token ); ?>">
 					<?php wp_nonce_field( 'wllm_import' ); ?>
 					<p><input type="file" name="migration_package" accept=".zip,application/zip" required></p>
 					<p><label><input type="checkbox" name="update_existing" value="1" checked> <strong>覆盖网址相同的已有链接</strong>（推荐，可修复之前失败的 Logo）</label></p>
@@ -153,7 +187,8 @@ final class WP_Link_Logo_Migrator {
 				<div style="width:min(560px,calc(100vw - 40px));background:#fff;border-radius:8px;padding:24px;box-shadow:0 12px 50px rgba(0,0,0,.28)">
 					<h2 id="wllm-progress-title" style="margin-top:0">正在处理</h2>
 					<p id="wllm-progress-text">请不要关闭页面。</p>
-					<div style="height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div id="wllm-progress-bar" style="height:100%;width:3%;background:#2271b1;border-radius:999px;transition:width .6s ease"></div></div>
+					<div style="height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div id="wllm-progress-bar" style="height:100%;width:0;background:#2271b1;border-radius:999px;transition:width .35s ease"></div></div>
+					<p style="display:flex;justify-content:space-between;margin:10px 0 0"><strong id="wllm-progress-percent">0%</strong><span id="wllm-progress-eta">预计剩余：计算中</span></p>
 					<p id="wllm-progress-time" style="color:#646970;margin-bottom:0">已用时：0 秒</p>
 				</div>
 			</div>
@@ -170,7 +205,13 @@ final class WP_Link_Logo_Migrator {
 			const progressText = document.getElementById('wllm-progress-text');
 			const progressBar = document.getElementById('wllm-progress-bar');
 			const progressTime = document.getElementById('wllm-progress-time');
+			const progressPercent = document.getElementById('wllm-progress-percent');
+			const progressEta = document.getElementById('wllm-progress-eta');
+			const ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
+			const progressNonce = <?php echo wp_json_encode( $progress_nonce ); ?>;
 			let timer = null;
+			let progressPoll = null;
+			let startedAt = 0;
 
 			function updateCount() {
 				count.textContent = '已选择 ' + checks.filter(c => c.checked).length + ' / ' + checks.length + ' 条';
@@ -206,18 +247,46 @@ final class WP_Link_Logo_Migrator {
 			function clearCookie(name) {
 				document.cookie = name + '=; Max-Age=0; path=<?php echo esc_js( COOKIEPATH ? COOKIEPATH : '/' ); ?>; SameSite=Lax';
 			}
-			function startProgress(mode) {
-				let seconds = 0, percent = 3;
+			function formatDuration(seconds) {
+				seconds = Math.max(0, Math.round(seconds));
+				if (seconds < 60) return seconds + ' 秒';
+				const minutes = Math.floor(seconds / 60), remain = seconds % 60;
+				if (minutes < 60) return minutes + ' 分 ' + remain + ' 秒';
+				return Math.floor(minutes / 60) + ' 小时 ' + (minutes % 60) + ' 分';
+			}
+			async function readProgress(token) {
+				try {
+					const body = new URLSearchParams({action:'wllm_progress',nonce:progressNonce,token:token});
+					const response = await fetch(ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body.toString()});
+					const json = await response.json();
+					if (!json.success || !json.data || json.data.status === 'pending') return;
+					const data = json.data, total = Math.max(1, Number(data.total)||1), completed = Math.max(0, Number(data.completed)||0);
+					const percent = data.status === 'finished' ? 100 : Math.min(99, Math.floor(completed / total * 100));
+					progressBar.style.width = percent + '%';
+					progressPercent.textContent = percent + '%（' + completed + ' / ' + total + '）';
+					progressText.textContent = (data.stage || '正在处理') + (data.current ? '：' + data.current : '');
+					const elapsed = Math.max(1, Date.now()/1000 - (Number(data.started_at)||startedAt/1000));
+					const rate = completed / elapsed;
+					progressEta.textContent = rate > 0 && completed < total ? '预计剩余：' + formatDuration((total-completed)/rate) : (completed >= total ? '预计剩余：0 秒' : '预计剩余：计算中');
+				} catch (error) {
+					progressEta.textContent = '预计剩余：等待服务器进度';
+				}
+			}
+			function startProgress(mode, token) {
+				let seconds = 0;
+				startedAt = Date.now();
 				overlay.style.display = 'flex';
 				progressTitle.textContent = mode === 'export' ? '正在导出链接' : '正在导入链接';
 				progressText.textContent = mode === 'export' ? '正在收集所选链接并打包 Logo。' : '正在上传并写入链接、分类和 Logo。';
-				progressBar.style.width = percent + '%';
+				progressBar.style.width = '0%';
+				progressPercent.textContent = '0%';
+				progressEta.textContent = '预计剩余：计算中';
 				timer = setInterval(() => {
 					seconds++;
-					percent = Math.min(94, percent + (percent < 60 ? 2.2 : percent < 82 ? .8 : .25));
-					progressBar.style.width = percent + '%';
-					progressTime.textContent = '已用时：' + seconds + ' 秒';
+					progressTime.textContent = '已用时：' + formatDuration(seconds);
 				}, 1000);
+				progressPoll = setInterval(() => readProgress(token), 800);
+				readProgress(token);
 			}
 			document.getElementById('wllm-export-form').addEventListener('submit', function (event) {
 				if (!checks.some(c => c.checked)) {
@@ -228,21 +297,25 @@ final class WP_Link_Logo_Migrator {
 				const token = this.querySelector('[name="export_token"]').value;
 				const cookie = 'wllm_export_' + token;
 				clearCookie(cookie);
-				startProgress('export');
+				startProgress('export', token);
 				const poll = setInterval(() => {
 					const result = cookieValue(cookie);
 					if (result.indexOf('done-') === 0) {
 						clearInterval(poll);
 						clearCookie(cookie);
 						clearInterval(timer);
+						clearInterval(progressPoll);
 						progressBar.style.width = '100%';
+						const count = parseInt(result.substring(5), 10) || 0;
+						progressPercent.textContent = '100%（' + count + ' / ' + count + '）';
+						progressEta.textContent = '预计剩余：0 秒';
 						progressTitle.textContent = '导出完成';
-						progressText.textContent = '已导出 ' + (parseInt(result.substring(5), 10) || 0) + ' 条链接，浏览器应已开始下载。';
+						progressText.textContent = '已导出 ' + count + ' 条链接，浏览器应已开始下载。';
 						setTimeout(() => overlay.style.display = 'none', 2400);
 					}
 				}, 700);
 			});
-			document.getElementById('wllm-import-form').addEventListener('submit', () => startProgress('import'));
+			document.getElementById('wllm-import-form').addEventListener('submit', function () { startProgress('import', this.querySelector('[name="progress_token"]').value); });
 		}());
 		</script>
 		<?php
@@ -312,6 +385,10 @@ final class WP_Link_Logo_Migrator {
 		if ( ! $ids ) wp_die( '请至少选择一条链接。', '未选择链接', array( 'back_link' => true ) );
 		$allowed_fields = array( 'logo', 'description', 'rating', 'categories' );
 		$fields = isset( $_POST['fields'] ) ? array_values( array_intersect( $allowed_fields, array_map( 'sanitize_key', (array) wp_unslash( $_POST['fields'] ) ) ) ) : array();
+		$progress_token = isset( $_POST['export_token'] ) ? sanitize_key( wp_unslash( $_POST['export_token'] ) ) : '';
+		$progress_total = max( 1, count( $ids ) );
+		$progress_done = 0;
+		self::set_progress( $progress_token, 0, $progress_total, '正在准备链接数据' );
 
 		$tmp = wp_tempnam( 'links-migration.zip' );
 		if ( ! $tmp ) wp_die( '无法创建临时文件。' );
@@ -331,7 +408,12 @@ final class WP_Link_Logo_Migrator {
 		$packed = array();
 		foreach ( $ids as $id ) {
 			$link = get_bookmark( $id );
-			if ( ! $link || is_wp_error( $link ) ) continue;
+			if ( ! $link || is_wp_error( $link ) ) {
+				++$progress_done;
+				self::set_progress( $progress_token, $progress_done, $progress_total, '正在导出链接', '无效链接 ID：' . $id );
+				continue;
+			}
+			self::set_progress( $progress_token, $progress_done, $progress_total, '正在打包链接和 Logo', $link->link_name );
 			$categories = in_array( 'categories', $fields, true ) ? wp_get_object_terms( $id, 'link_category', array( 'fields' => 'names' ) ) : array();
 			if ( is_wp_error( $categories ) ) $categories = array();
 			$item = array(
@@ -372,13 +454,16 @@ final class WP_Link_Logo_Migrator {
 				}
 			}
 			$manifest['links'][] = $item;
+			++$progress_done;
+			self::set_progress( $progress_token, $progress_done, $progress_total, '正在导出链接', $link->link_name );
 		}
 		$json = wp_json_encode( $manifest, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		if ( false === $json || ! $zip->addFromString( 'manifest.json', $json ) ) {
 			$zip->close(); @unlink( $tmp ); wp_die( '无法写入迁移清单。' );
 		}
 		$zip->close();
-		$token = isset( $_POST['export_token'] ) ? sanitize_key( wp_unslash( $_POST['export_token'] ) ) : '';
+		self::set_progress( $progress_token, $progress_total, $progress_total, '导出完成', '', 'finished' );
+		$token = $progress_token;
 		if ( $token ) setcookie( 'wllm_export_' . $token, 'done-' . count( $manifest['links'] ), array( 'expires' => time() + 300, 'path' => COOKIEPATH ? COOKIEPATH : '/', 'secure' => is_ssl(), 'httponly' => false, 'samesite' => 'Lax' ) );
 		$filename = 'wordpress-links-' . gmdate( 'Y-m-d-His' ) . '.zip';
 		nocache_headers();
@@ -476,16 +561,22 @@ final class WP_Link_Logo_Migrator {
 		$update = ! empty( $_POST['update_existing'] );
 		$result = array( 'created' => 0, 'updated' => 0, 'skipped' => 0, 'logos' => 0, 'failed_links' => array(), 'failed_logos' => array(), 'warnings' => array() );
 		$seen = array();
+		$progress_token = isset( $_POST['progress_token'] ) ? sanitize_key( wp_unslash( $_POST['progress_token'] ) ) : '';
+		$progress_total = max( 1, count( $manifest['links'] ) );
+		$progress_done = 0;
+		self::set_progress( $progress_token, 0, $progress_total, '正在准备导入' );
 		foreach ( $manifest['links'] as $index => $item ) {
-			if ( ! is_array( $item ) ) { $result['failed_links'][] = array( 'name' => '第 ' . ( $index + 1 ) . ' 条', 'url' => '', 'reason' => '数据格式无效' ); continue; }
+			$current_name = is_array( $item ) && ! empty( $item['name'] ) ? sanitize_text_field( $item['name'] ) : '第 ' . ( $index + 1 ) . ' 条链接';
+			self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接和 Logo', $current_name );
+			if ( ! is_array( $item ) ) { $result['failed_links'][] = array( 'name' => '第 ' . ( $index + 1 ) . ' 条', 'url' => '', 'reason' => '数据格式无效' ); ++$progress_done; self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接', $current_name ); continue; }
 			$name = sanitize_text_field( isset( $item['name'] ) ? $item['name'] : '' );
 			$url = esc_url_raw( isset( $item['url'] ) ? $item['url'] : '', array( 'http','https' ) );
-			if ( ! $name || ! $url ) { $result['failed_links'][] = array( 'name' => $name ? $name : '第 ' . ( $index + 1 ) . ' 条', 'url' => $url, 'reason' => '缺少名称或有效网址' ); continue; }
+			if ( ! $name || ! $url ) { $result['failed_links'][] = array( 'name' => $name ? $name : '第 ' . ( $index + 1 ) . ' 条', 'url' => $url, 'reason' => '缺少名称或有效网址' ); ++$progress_done; self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接', $current_name ); continue; }
 			$normalized = self::normalize_url( $url );
 			if ( isset( $seen[ $normalized ] ) ) $result['warnings'][] = $name . '：迁移包内存在重复网址，请检查旧站是否有重复链接。';
 			$seen[ $normalized ] = true;
 			$existing_id = self::find_existing_link_id( $url );
-			if ( $existing_id && ! $update ) { ++$result['skipped']; continue; }
+			if ( $existing_id && ! $update ) { ++$result['skipped']; ++$progress_done; self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接', $name ); continue; }
 			$old = $existing_id ? get_bookmark( $existing_id ) : null;
 			$old_image = $old && ! is_wp_error( $old ) ? (string) $old->link_image : '';
 			$package_image = esc_url_raw( isset( $item['image_url'] ) ? $item['image_url'] : '', array( 'http','https' ) );
@@ -522,6 +613,8 @@ final class WP_Link_Logo_Migrator {
 			if ( is_wp_error( $link_id ) || ! $link_id ) {
 				if ( $created_attachment ) wp_delete_attachment( $created_attachment, true );
 				$result['failed_links'][] = array( 'name' => $name, 'url' => $url, 'reason' => is_wp_error( $link_id ) ? $link_id->get_error_message() : '数据库未返回链接 ID' );
+				++$progress_done;
+				self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接', $name );
 				continue;
 			}
 			if ( in_array( 'categories', $fields, true ) ) {
@@ -533,8 +626,11 @@ final class WP_Link_Logo_Migrator {
 				++$result['updated'];
 				if ( $old_image && $old_image !== $image_url ) self::maybe_delete_old_managed_image( $old_image );
 			} else ++$result['created'];
+			++$progress_done;
+			self::set_progress( $progress_token, $progress_done, $progress_total, '正在导入链接', $name );
 		}
 		$zip->close();
+		self::set_progress( $progress_token, $progress_total, $progress_total, '导入完成', '', 'finished' );
 		set_transient( 'wllm_result_' . get_current_user_id(), $result, 15 * MINUTE_IN_SECONDS );
 		wp_safe_redirect( admin_url( 'tools.php?page=' . self::PAGE ) );
 		exit;

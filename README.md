@@ -23,7 +23,7 @@
 
 最新可安装包：
 
-[`dist/wp-link-logo-migrator-2.0.0.zip`](dist/wp-link-logo-migrator-2.0.0.zip)
+[`dist/wp-link-logo-migrator-2.1.0.zip`](dist/wp-link-logo-migrator-2.1.0.zip)
 
 安装步骤：
 
@@ -142,9 +142,9 @@ post_max_size = 512M
 
 不会。本插件只处理 WordPress 链接表、链接分类关系和相关媒体附件。
 
-### 进度条是精确百分比吗？
+### 百分比和预计时间如何计算？
 
-不是。它表示服务器仍在处理并显示耗时；最终结果以完成报告中的实际数量为准。
+百分比按服务器实际完成的链接任务计算。预计时间根据已经完成任务的平均速度动态更新；单个大 Logo 下载较慢时，预计时间可能暂时波动。
 
 ## 安全建议
 
