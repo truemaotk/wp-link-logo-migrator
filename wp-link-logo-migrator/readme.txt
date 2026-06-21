@@ -3,7 +3,7 @@ Contributors: maotk
 Tags: links, bookmarks, migration, logo
 Requires at least: 5.8
 Requires PHP: 7.4
-Stable tag: 2.1.0
+Stable tag: 2.1.1
 License: GPLv2 or later
 
 在两个 WordPress 网站之间迁移链接、链接分类、简介、评分和 Logo 图片。
@@ -26,6 +26,11 @@ License: GPLv2 or later
 * 服务器必须启用 PHP ZipArchive 扩展。
 
 == 更新记录 ==
+
+= 2.1.1 =
+
+* 完成时显示右上角关闭按钮和底部关闭按钮。
+* 真实进度达到 100% 后不再只依赖下载 Cookie 关闭窗口。
 
 = 2.1.0 =
 
