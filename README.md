@@ -23,7 +23,7 @@
 
 最新可安装包：
 
-[`dist/wp-link-logo-migrator-2.1.1.zip`](dist/wp-link-logo-migrator-2.1.1.zip)
+[`dist/wp-link-logo-migrator-2.1.2.zip`](dist/wp-link-logo-migrator-2.1.2.zip)
 
 安装步骤：
 
@@ -146,7 +146,7 @@ post_max_size = 512M
 
 百分比按服务器实际完成的链接任务计算。预计时间根据已经完成任务的平均速度动态更新；单个大 Logo 下载较慢时，预计时间可能暂时波动。
 
-达到 100% 后会显示右上角和底部关闭按钮，不再只依赖浏览器下载事件自动关闭。
+达到 100% 后会显示右上角和底部关闭按钮。窗口不会自动消失，必须由用户手动关闭。
 
 ## 安全建议
 

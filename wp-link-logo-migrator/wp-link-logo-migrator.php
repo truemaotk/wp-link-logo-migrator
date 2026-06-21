@@ -3,7 +3,7 @@
  * Plugin Name: 链接与 Logo 迁移工具
  * Plugin URI: https://www.maotk.com/
  * Description: 选择并迁移 WordPress 链接、分类、简介、评分和 Logo 图片。
- * Version: 2.1.1
+ * Version: 2.1.2
  * Author: Mao TK
  * Author URI: https://www.maotk.com/
  * Requires at least: 5.8
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class WP_Link_Logo_Migrator {
-	const VERSION            = '2.1.1';
+	const VERSION            = '2.1.2';
 	const PAGE               = 'wp-link-logo-migrator';
 	const BRAND_URL          = 'https://www.maotk.com/';
 	const BRAND_LOGO         = 'https://www.maotk.com/wp-content/uploads/maotk-favicon.svg';
@@ -336,8 +336,7 @@ final class WP_Link_Logo_Migrator {
 						progressEta.textContent = '预计剩余：0 秒';
 						enableClose();
 						progressTitle.textContent = '导出完成';
-						progressText.textContent = '已导出 ' + count + ' 条链接，浏览器应已开始下载。';
-						setTimeout(() => overlay.style.display = 'none', 2400);
+						progressText.textContent = '已导出 ' + count + ' 条链接，浏览器应已开始下载。请点击关闭按钮。';
 					}
 				}, 700);
 			});
